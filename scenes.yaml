@@ -1,0 +1,83 @@
+scene1:
+  # Number of nodes of the trajectory
+  T: 25
+
+  # Time step between each node
+  dt: 0.05
+
+  # Initial configuration and velocity
+  INITIAL_CONFIG:
+    - 0.53274129
+    - 0.76108906
+    - -0.30547986
+    - -2.0942417
+    - 0.54367702
+    - 2.9007583
+    - -2.17958825
+  INITIAL_VELOCITY:
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+
+  # Target pose
+  TARGET_POSE:
+    orientation: [ 1, 0, 0, 0 ]
+    translation: [0,0.2,0.9]
+
+  # Weights
+  WEIGHT_uREG: 0.0001
+  WEIGHT_xREG: 0.1
+  WEIGHT_GRIPPER_POSE: 5
+  WEIGHT_GRIPPER_POSE_TERM: 100
+  WEIGHT_LIMIT: 0.1
+
+  # Safety threshold
+  SAFETY_THRESHOLD: 0.01
+
+
+  OBSTACLES:
+    obstacle1:
+        type: "ellipsoid"
+        translation: [0.0, 0.0, 0.9]
+        orientation: [0.707,0, 0.707, 0]
+        dim: [0.12, 0.06, 0.2]
+    obstacle2:
+        type: "ellipsoid"
+        translation: [0.0, 0.4, 0.9]
+        orientation: [0.707,0, 0.707, 0]
+        dim: [0.12, 0.06, 0.2]
+    obstacle3:
+        type: "ellipsoid"
+        translation: [-0.2, 0.2, 0.9]
+        orientation: [ 0.5, 0.5, -0.5, 0.5]
+        dim: [0.12, 0.06, 0.2]
+    obstacle4:
+        type: "ellipsoid"
+        translation: [0.2, 0.2, 0.9]
+        orientation: [ 0.5, 0.5, -0.5, 0.5]
+        dim: [0.12, 0.06, 0.2]
+
+  ROBOT_ELLIPSOIDS:
+    el1:
+      parentFrame: panda2_link7_sc
+      dim: [0.1, 0.08, 0.15]
+
+  collision_pairs:
+  - [obstacle1, el1]
+  - [obstacle2, el1]
+  - [obstacle3, el1]
+  - [obstacle4, el1]
+
+  - [obstacle1, panda2_rightfinger_0]
+  - [obstacle2, panda2_rightfinger_0]
+  - [obstacle3, panda2_rightfinger_0]
+  - [obstacle4, panda2_rightfinger_0]
+
+  - [obstacle1, panda2_leftfinger_0]
+  - [obstacle2, panda2_leftfinger_0]
+  - [obstacle3, panda2_leftfinger_0]
+  - [obstacle4, panda2_leftfinger_0]

@@ -1,0 +1,86 @@
+# BSD 3-Clause License
+#
+# Copyright (C) 2024, LAAS-CNRS.
+# Copyright note valid unless otherwise stated in individual files.
+# All rights reserved.
+
+import argparse
+import os
+
+import create_ocp
+import numpy as np
+import pinocchio as pin
+from param_parsers import ParamParser
+from visualizer import add_sphere_to_viewer, create_viewer
+from wrapper_panda import PandaWrapper
+
+
+### Argument parser
+def scene_type(value):
+    ivalue = int(value)
+    if ivalue < 1 or ivalue > 3:
+        raise argparse.ArgumentTypeError(
+            f"Scene must be an integer between 1 and 3. You provided {ivalue}."
+        )
+    return ivalue
+
+
+# Create the parser
+parser = argparse.ArgumentParser(description="Process scene argument.")
+
+# Add argument for scene
+parser.add_argument(
+    "--scene",
+    "-s",
+    type=scene_type,
+    required=True,
+    help="Scene number (must be 1, 2, or 3).",
+)
+
+# Parse the arguments
+args = parser.parse_args()
+
+
+# Creating the robot
+robot_wrapper = PandaWrapper(capsule=False)
+rmodel, cmodel, vmodel = robot_wrapper()
+
+yaml_path = os.path.join(os.path.dirname(__file__), "scenes.yaml")
+pp = ParamParser(yaml_path, args.scene)
+
+cmodel = pp.add_collisions(rmodel, cmodel)
+
+cdata = cmodel.createData()
+rdata = rmodel.createData()
+
+
+# Generating the meshcat visualizer
+vis = create_viewer(rmodel, cmodel, cmodel)
+add_sphere_to_viewer(
+    vis, "goal", 5e-2, pp.get_target_pose().translation, color=0x006400
+)
+
+# OCP with distance constraints
+OCP_dist = create_ocp.create_ocp_distance(rmodel, cmodel, pp)
+XS_init = [pp.get_X0()] * (pp.get_T() + 1)
+US_init = OCP_dist.problem.quasiStatic(XS_init[:-1])
+
+OCP_dist.solve(XS_init, US_init, 100)
+print("OCP with distance constraints solved")
+
+
+for i, xs in enumerate(OCP_dist.xs):
+    q = np.array(xs[:7].tolist())
+    pin.framesForwardKinematics(rmodel, rdata, q)
+    add_sphere_to_viewer(
+        vis,
+        "colmpc" + str(i),
+        2e-2,
+        rdata.oMf[rmodel.getFrameId("panda2_rightfinger")].translation,
+        color=100000,
+    )
+while True:
+    print("OCP with distance constraints")
+    for q in OCP_dist.xs:
+        vis.display(q[:7])
+        input()
