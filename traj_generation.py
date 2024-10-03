@@ -1,5 +1,4 @@
 import os
-import time
 import torch
 import pinocchio as pin
 import numpy as np
@@ -10,6 +9,26 @@ from param_parsers import ParamParser
 from plan_and_optimize import PlanAndOptimize
 
 
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+
+# Define custom progress bar
+progress_bar = Progress(
+    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+    BarColumn(),
+    MofNCompleteColumn(),
+    TextColumn("•"),
+    TimeElapsedColumn(),
+    TextColumn("•"),
+    TimeRemainingColumn(),
+)
+
 class TrajGeneration():
     
     def __init__(self, rmodel: pin.Model, cmodel: pin.GeometryModel, pp: ParamParser):
@@ -18,22 +37,38 @@ class TrajGeneration():
         self.pp = pp
         self.PaO = PlanAndOptimize(self.rmodel, self.cmodel, "panda2_hand_tcp", self.pp.get_T())
 
-    def generate_trajs_random_target_fixed_initial_config(self, num_trajs= 10):
-                
-        results = []
-        q0 = self.pp.get_initial_config()
-        for i in range(num_trajs):
-            targ = self.PaO.get_random_reachable_target()    
-            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(rmodel, cmodel,TARGET_POSE=targ, x0=pp.get_X0(),pp= pp)
-            OCP = OCP_CREATOR.create_OCP()    
-            xs, us = self.PaO.compute_traj(q0,targ, OCP)
+
+    def generate_traj(self, q0, targ):
+        """Helper function to generate a single trajectory"""
+        try:
+            x0 = np.concatenate([q0, np.zeros(self.rmodel.nv)])
+            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(self.rmodel, self.cmodel, TARGET_POSE=targ, x0=x0, pp=self.pp)
+            OCP = OCP_CREATOR.create_OCP()
+            xs, us = self.PaO.compute_traj(q0, targ, OCP)
             
             # Convert to PyTorch tensors and store
             target_tensor = torch.tensor(pin.SE3ToXYZQUAT(targ)[:3], dtype=torch.float32)  # 1D tensor (3 elements)
             xs_tensor = torch.tensor(xs, dtype=torch.float32)  # List of T 1D arrays of size (nq + nv)
             us_tensor = torch.tensor(us, dtype=torch.float32)  # List of T - 1 1D arrays of size nq
 
-            results.append((target_tensor, xs_tensor, us_tensor))
+            return target_tensor, xs_tensor, us_tensor
+
+        except Exception as e:
+            print(f"Failed to generate trajectory. Error: {str(e)}")
+            return None, None, None
+
+
+    def generate_trajs_random_target_fixed_initial_config(self, num_trajs= 10):
+        results = []
+        q0 = self.pp.get_initial_config()
+        with progress_bar as p:
+            for i in p.track(range(num_trajs)):
+                targ = self.PaO.get_random_reachable_target()  
+                target_tensor, xs_tensor, us_tensor = self.generate_traj(q0, targ)
+                if target_tensor is not None:
+                    results.append((target_tensor, xs_tensor, us_tensor))
+                else:
+                    i -= 1
         return results
     
     def generate_trajs_fixed_target_random_initial_config(self, num_trajs=10):
@@ -45,24 +80,18 @@ class TrajGeneration():
         Returns:
             _type_: _description_
         """
-        results = []
-        targ = self.pp.get_target_pose()    
-        for i in range(num_trajs):
-            q0 = pin.randomConfiguration(self.rmodel)  # Random configuration
-            x0 = np.concatenate((q0, np.zeros(self.rmodel.nv)))
-            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(self.rmodel, self.cmodel, TARGET_POSE=targ, x0=x0, pp=self.pp)
-            OCP = OCP_CREATOR.create_OCP()    
-            xs, us = self.PaO.compute_traj(q0, targ, OCP)
-            xs_array = np.vstack(xs)
-            us_array = np.vstack(us)
-            # Convert to PyTorch tensors and store
-            target_tensor = torch.tensor(pin.SE3ToXYZQUAT(targ)[:3], dtype=torch.float32)  # 1D tensor (3 elements)
-            xs_tensor = torch.tensor(xs_array, dtype=torch.float32)  # List of T 1D arrays of size (nq + nv)
-            us_tensor = torch.tensor(us_array, dtype=torch.float32)  # List of T - 1 1D arrays of size nq
-
-            results.append((target_tensor, xs_tensor, us_tensor))
-
+        results = []      
+        targ =  self.pp.get_target_pose()   
+        with progress_bar as p:
+            for i in p.track(range(num_trajs)):
+                q0 = pin.randomConfiguration(self.rmodel)
+                target_tensor, xs_tensor, us_tensor = self.generate_traj(q0, targ)
+                if target_tensor is not None:
+                    results.append((target_tensor, xs_tensor, us_tensor))
+                else:
+                    i -= 1
         return results
+    
     
     def save_trajs_as_tensors(self, trajs, filename='trajectories.pt'):
         """
@@ -99,7 +128,7 @@ if __name__ == "__main__":
     # Generating the meshcat visualizer
     vis = create_viewer(rmodel, cmodel, cmodel)    
     TG = TrajGeneration(rmodel, cmodel, pp)
-    results = TG.generate_trajs_fixed_target_random_initial_config(num_trajs = 5)
+    results = TG.generate_trajs_fixed_target_random_initial_config(num_trajs = 100)
     TG.save_trajs_as_tensors(results, 'trajectories_test.pt')
     for i,result in enumerate(results):
         if i > 0:
