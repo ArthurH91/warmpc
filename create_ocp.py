@@ -188,6 +188,6 @@ class OCPPandaReachingColWithMultipleCol:
         ocp.eps_abs = 1e-6
         ocp.eps_rel = 0
 
-        ocp.with_callbacks = True
+        ocp.with_callbacks = False
 
         return ocp
