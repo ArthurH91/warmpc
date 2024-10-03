@@ -1,5 +1,6 @@
 import os
 import time
+import torch
 import pinocchio as pin
 import numpy as np
 from visualizer import create_viewer, add_sphere_to_viewer
@@ -18,7 +19,7 @@ class TrajGeneration():
         self.PaO = PlanAndOptimize(self.rmodel, self.cmodel, "panda2_hand_tcp", self.pp.get_T())
 
     def generate_trajs_random_target_fixed_initial_config(self, num_trajs= 10):
-        
+                
         results = []
         q0 = self.pp.get_initial_config()
         for i in range(num_trajs):
@@ -26,23 +27,53 @@ class TrajGeneration():
             OCP_CREATOR = OCPPandaReachingColWithMultipleCol(rmodel, cmodel,TARGET_POSE=targ, x0=pp.get_X0(),pp= pp)
             OCP = OCP_CREATOR.create_OCP()    
             xs, us = self.PaO.compute_traj(q0,targ, OCP)
-            results.append((pin.SE3ToXYZQUATtuple(targ),xs.tolist(),us.tolist()))
+            
+            # Convert to PyTorch tensors and store
+            target_tensor = torch.tensor(pin.SE3ToXYZQUAT(targ)[:3], dtype=torch.float32)  # 1D tensor (3 elements)
+            xs_tensor = torch.tensor(xs, dtype=torch.float32)  # List of T 1D arrays of size (nq + nv)
+            us_tensor = torch.tensor(us, dtype=torch.float32)  # List of T - 1 1D arrays of size nq
+
+            results.append((target_tensor, xs_tensor, us_tensor))
         return results
     
-    def generate_trajs_fixed_target_random_initial_config(self, num_trajs= 10):
-        
+    def generate_trajs_fixed_target_random_initial_config(self, num_trajs=10):
+        """_summary_
+
+        Args:
+            num_trajs (int, optional): _description_. Defaults to 10.
+
+        Returns:
+            _type_: _description_
+        """
         results = []
         targ = self.pp.get_target_pose()    
         for i in range(num_trajs):
-            q0 = pin.randomConfiguration(rmodel)
+            q0 = pin.randomConfiguration(self.rmodel)  # Random configuration
             x0 = np.concatenate((q0, np.zeros(self.rmodel.nv)))
-            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(rmodel, cmodel,TARGET_POSE=targ, x0=x0,pp= pp)
+            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(self.rmodel, self.cmodel, TARGET_POSE=targ, x0=x0, pp=self.pp)
             OCP = OCP_CREATOR.create_OCP()    
-            xs, us = self.PaO.compute_traj(q0,targ, OCP)
-            results.append((pin.SE3ToXYZQUATtuple(targ),xs.tolist(),us.tolist()))
+            xs, us = self.PaO.compute_traj(q0, targ, OCP)
+            xs_array = np.vstack(xs)
+            us_array = np.vstack(us)
+            # Convert to PyTorch tensors and store
+            target_tensor = torch.tensor(pin.SE3ToXYZQUAT(targ)[:3], dtype=torch.float32)  # 1D tensor (3 elements)
+            xs_tensor = torch.tensor(xs_array, dtype=torch.float32)  # List of T 1D arrays of size (nq + nv)
+            us_tensor = torch.tensor(us_array, dtype=torch.float32)  # List of T - 1 1D arrays of size nq
+
+            results.append((target_tensor, xs_tensor, us_tensor))
+
         return results
     
-    
+    def save_trajs_as_tensors(self, trajs, filename='trajectories.pt'):
+        """
+        Store the generated trajectories as a tensor file using torch.save.
+        
+        Args:
+            trajs (list): List of tuples (target_tensor, xs_tensor, us_tensor)
+            filename (str): Name of the file to store the tensors.
+        """
+        torch.save(trajs, filename)
+        print(f"Trajectories stored as {filename}.")
     
 if __name__ == "__main__":
     
@@ -69,12 +100,14 @@ if __name__ == "__main__":
     vis = create_viewer(rmodel, cmodel, cmodel)    
     TG = TrajGeneration(rmodel, cmodel, pp)
     results = TG.generate_trajs_fixed_target_random_initial_config(num_trajs = 5)
-        
+    TG.save_trajs_as_tensors(results, 'trajectories_test.pt')
     for i,result in enumerate(results):
-        print(result[0])
+        if i > 0:
+            vis.viewer["goal" + str(i-1)].delete()
         add_sphere_to_viewer(
-            vis, "goal" + str(i), 5e-2, result[0][:3], color=0x006400
+            vis, "goal" + str(i), 5e-2, result[0].numpy(), color=0x006400
         )
+        
         for x in result[1]:
-            vis.display(x[:7])
+            vis.display(x[:7].numpy())
             input()
