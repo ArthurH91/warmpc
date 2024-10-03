@@ -342,7 +342,6 @@ class PlanAndOptimize:
         
         fine_path = self.plan()
         t = self._ressample_path()
-        print("solved, now optimizing")
         xs, us = self.optimize(OCP)
         
         return xs, us
