@@ -8,6 +8,7 @@ from create_ocp import OCPPandaReachingColWithMultipleCol
 from param_parsers import ParamParser
 from plan_and_optimize import PlanAndOptimize
 
+from typing import Tuple
 
 from rich.progress import (
     BarColumn,
@@ -38,25 +39,21 @@ class TrajGeneration():
         self.PaO = PlanAndOptimize(self.rmodel, self.cmodel, "panda2_hand_tcp", self.pp.get_T())
 
 
-    def generate_traj(self, q0, targ):
+    def generate_traj(self, X0, targ):
         """Helper function to generate a single trajectory"""
         try:
-            x0 = np.concatenate([q0, np.zeros(self.rmodel.nv)])
-            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(self.rmodel, self.cmodel, TARGET_POSE=targ, x0=x0, pp=self.pp)
-            OCP = OCP_CREATOR.create_OCP()
-            xs, us = self.PaO.compute_traj(q0, targ, OCP)
-            
-            # Convert to PyTorch tensors and store
-            target_tensor = torch.tensor(pin.SE3ToXYZQUAT(targ)[:3], dtype=torch.float32)  # 1D tensor (3 elements)
-            xs_tensor = torch.tensor(xs, dtype=torch.float32)  # List of T 1D arrays of size (nq + nv)
-            us_tensor = torch.tensor(us, dtype=torch.float32)  # List of T - 1 1D arrays of size nq
 
-            return target_tensor, xs_tensor, us_tensor
+            OCP_CREATOR = OCPPandaReachingColWithMultipleCol(self.rmodel, self.cmodel, TARGET_POSE=targ, x0=X0, pp=self.pp)
+            OCP = OCP_CREATOR.create_OCP()
+            xs, us = self.PaO.compute_traj(X0[:7], targ, OCP) # Here the q0 is for the initial config. The velocity is encompassed in the OCP.
+            # Convert to PyTorch tensors and store
+            target = pin.SE3ToXYZQUAT(targ)[:3]
+            inputs, outputs = self.from_targ_xs_us_to_input_output(target, xs, us)
+            return inputs, outputs
 
         except Exception as e:
             print(f"Failed to generate trajectory. Error: {str(e)}")
-            return None, None, None
-
+            return None, None
 
     def generate_trajs_random_target_fixed_initial_config(self, num_trajs= 10):
         results = []
@@ -64,9 +61,10 @@ class TrajGeneration():
         with progress_bar as p:
             for i in p.track(range(num_trajs)):
                 targ = self.PaO.get_random_reachable_target()  
-                target_tensor, xs_tensor, us_tensor = self.generate_traj(q0, targ)
-                if target_tensor is not None:
-                    results.append((target_tensor, xs_tensor, us_tensor))
+                X0 = np.concatenate((q0, np.zeros(self.rmodel.nv)))
+                input, output = self.generate_traj(X0, targ)
+                if output is not None:
+                    results.append((input, output))
                 else:
                     i -= 1
         return results
@@ -85,23 +83,35 @@ class TrajGeneration():
         with progress_bar as p:
             for i in p.track(range(num_trajs)):
                 q0 = pin.randomConfiguration(self.rmodel)
-                target_tensor, xs_tensor, us_tensor = self.generate_traj(q0, targ)
-                if target_tensor is not None:
-                    results.append((target_tensor, xs_tensor, us_tensor))
+                X0 = np.concatenate((q0, np.zeros(self.rmodel.nv)))
+                input, output = self.generate_traj(X0, targ)
+                if output is not None:
+                    results.append((input, output))
                 else:
                     i -= 1
         return results
     
+    def from_targ_xs_us_to_input_output(self, targ: np.ndarray, xs: list, us: list) -> Tuple[torch.Tensor, torch.Tensor]:
+        
+        X0 = xs[0]
+        inputs_tensor = torch.tensor(np.concatenate((targ,X0)), dtype=torch.float32)
+        outputs = np.zeros((self.pp.get_T() - 1, self.rmodel.nq + self.rmodel.nv + 7)) #7 is dim of Nu
+        for iter, (X, U) in enumerate(zip(xs[1:], us)):
+            outputs[iter][:self.rmodel.nq + self.rmodel.nv] = X
+            outputs[iter][self.rmodel.nq + self.rmodel.nv:] = U
+        outputs_tensor = torch.tensor(outputs, dtype=torch.float32)
+        return inputs_tensor, outputs_tensor
     
-    def save_trajs_as_tensors(self, trajs, filename='trajectories.pt'):
+    
+    def save_results_as_tensors(self, results, filename='trajectories.pt'):
         """
-        Store the generated trajectories as a tensor file using torch.save.
+        Store the generated results as a tensor file using torch.save.
         
         Args:
-            trajs (list): List of tuples (target_tensor, xs_tensor, us_tensor)
+            results (list): List of tuples (target_tensor, xs_tensor, us_tensor)
             filename (str): Name of the file to store the tensors.
         """
-        torch.save(trajs, filename)
+        torch.save(results, filename)
         print(f"Trajectories stored as {filename}.")
     
 if __name__ == "__main__":
@@ -128,8 +138,8 @@ if __name__ == "__main__":
     # Generating the meshcat visualizer
     vis = create_viewer(rmodel, cmodel, cmodel)    
     TG = TrajGeneration(rmodel, cmodel, pp)
-    results = TG.generate_trajs_fixed_target_random_initial_config(num_trajs = 100)
-    TG.save_trajs_as_tensors(results, 'trajectories_test.pt')
+    results = TG.generate_trajs_fixed_target_random_initial_config(num_trajs = 10)
+    TG.save_results_as_tensors(results, 'trajectories_test.pt')
     for i,result in enumerate(results):
         if i > 0:
             vis.viewer["goal" + str(i-1)].delete()
