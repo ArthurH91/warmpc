@@ -2,61 +2,31 @@ import torch
 from torch.utils.data import Dataset
 
 class CustomDataset(Dataset):
-    def __init__(self, data, nq, nv, nu):
+    def __init__(self, data):
         """
         Args:
-            data (list): List A, where each element contains:
-                - A tensor of 3 elements
-                - A list containing T tensors of size (nq + nv)
-                - A list of T - 1 tensors of size nq
-            nq (int): Size of the second list elements (nq).
-            nv (int): Size of the remaining elements in the (nq + nv) list.
+            data (torch.Tensor): Tensor of tuples containing the data to be used in the dataset. The tuple should contain the following elements:
+                - input (torch.Tensor): Input tensor of shape (input_size)
+                - output (torch.Tensor): Output tensor of shape (nq + nv + nu, T - 1)
+                where: nq, nv and nu are the number of joint positions, velocities and control inputs, respectively and T is the number of time steps.
         """
         self.data = data
-        self.nq = nq
-        self.nv = nv
-        self.nu = nu
-
+        
     def __len__(self):
-        # Return the total number of elements in the dataset (i.e., length of list A)
+        # Return the total number of elements in the dataset (i.e., length of the tensor)
         return len(self.data)
+
+
 
     def __getitem__(self, idx):
         # Get list A at the given index
-        A = self.data[idx]
-        
-        # Unpack the elements
-        target_pose = A[0]  # Tensor of 3 elements
-        XS = A[1]   # List of T tensors of size (nq + nv)
-        US = A[2]  # List of T - 1 tensors of size nq
-        
-        # Ensure XS has at least one tensor
-        if len(XS) < 1:
-            raise ValueError(f"Expected at least 1 tensor in XS, but got {len(XS)}.")
-        
-        # Input to the NN: 1D tensor of 3 elements and the first tensor of XS
-        input_data = torch.cat((target_pose, XS[0]), dim=0).squeeze()
+        d = self.data[idx]
 
-        # Use zip to pair XS[1:] and US directly, then concatenate each pair
-        output_list = [torch.cat((x, u), dim=0) for x, u in zip(XS[1:], US)]
-
-        # Perform a single concatenation of all tensors in the list
-        output_data = torch.cat(output_list, dim=0).squeeze()
+        # Return the input and output tensors
+        input_data = d[0]
+        output_data = torch.flatten(d[1])
         return input_data, output_data
     
-    def get_us_from_output(self, output):
-        # Split the output tensor into T - 1 tensors of size nq
-        out = torch.split(output, self.nq + self.nv + self.nu)
-        us = [o[-self.nu:] for o in out]
-        return torch.stack(us)
-
-    def get_xs_from_input_output(self,input, output):
-        # Split the output tensor into T - 1 tensors of size nq
-        inp = torch.split(input, self.nq + self.nv)
-        out = torch.split(output, self.nq + self.nv + self.nu)
-        x0 = input[3:].reshape(1, len(input[3:]))
-        xs_out = torch.stack([o[:self.nq + self.nv] for o in out])
-        return torch.cat((x0, xs_out))
 
 if __name__ == "__main__":
     import os
@@ -78,21 +48,27 @@ if __name__ == "__main__":
     vis = create_viewer(rmodel, cmodel, cmodel)    
 
     # Example usage
-    nq, nv, nu = 7, 7, 7
     # Simulated example data (same as the previous one, but now tensors instead of NumPy arrays)
     data = torch.load('trajectories_test.pt')
     # Create the dataset and dataloader
-    dataset = CustomDataset(data, nq=nq, nv=nv, nu=nu)
+    dataset = CustomDataset(data)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
-
+    nu = 7
     # Example loop to see inputs and outputs
-    for iter, (inputs, outputs) in enumerate(dataloader):
+    for iter, (inputs, outputs) in enumerate(dataloader):     
         inputs = inputs.squeeze()
-        outputs = outputs.squeeze()
-        
+        outputs = outputs.squeeze()  
         targ = inputs[:3]
         x0 = inputs[3:]
-        xs = dataset.get_xs_from_input_output(input=inputs, output=outputs)    
+        q0 = x0[:7]
+        T = pp.get_T()
+        xs = []
+        us = []
+        for i in range(T-1):
+            x = outputs[i * (rmodel.nq + rmodel.nv + nu) : (i) * (rmodel.nq + rmodel.nv + nu) + rmodel.nq + rmodel.nv]
+            u = outputs[(i) * (rmodel.nq + rmodel.nv + nu) + rmodel.nq + rmodel.nv: (i + 1) * (rmodel.nq + rmodel.nv + nu)]
+            xs.append(x)
+            us.append(u)
         if iter > 0:
             vis.viewer["goal" + str(iter-1)].delete()
             add_sphere_to_viewer(
